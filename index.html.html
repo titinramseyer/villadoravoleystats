@@ -1,0 +1,1617 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#0f172a">
+    <title>Villa Dora Voley - Por Agustin Ramseyer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #0f172a; 
+            color: #f8fafc; 
+            overscroll-behavior-y: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #1e293b; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 2px; }
+        .btn-press { transition: transform 0.08s ease; }
+        .btn-press:active { transform: scale(0.96); }
+        /* Altura real de pantalla en celulares (sin la barra del navegador) y áreas seguras del iPhone */
+        html, body { height: 100%; }
+        body { height: 100vh; height: 100dvh; }
+        #app { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+        /* Toques instantáneos (sin demora de doble toque) */
+        button, select, input, a { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+        /* iPhone/iPad hacen zoom en campos con letra menor a 16px */
+        @media (max-width: 1023px) { input, select, textarea { font-size: 16px !important; } }
+        input, textarea { user-select: text; -webkit-user-select: text; }
+    </style>
+</head>
+<body class="w-full overflow-hidden flex flex-col">
+
+<div id="app" class="h-full w-full flex flex-col relative"></div>
+
+<script>
+    const app = {
+        state: {
+            view: 'home', // home, setup, tracker, stats, history
+            currentMatch: null,
+            t_team: 'local', 
+            t_player: null,
+            t_fundamental: null,
+            t_zoneFrom: null,
+            t_zoneTo: null,
+            winDismissed: false,
+            matches: [],
+            filters: { category: 'all', branch: 'all', letter: 'all' },
+            sessionUser: null,
+            storageFull: false,
+            cloud: { status: 'local', canWrite: true },
+        },
+
+        // ================= ACCESO =================
+        // Usuarios habilitados. La contraseña no se guarda en texto: se guarda su huella SHA-256
+        // de "ratavoley|usuario|contraseña". Para agregar o cambiar usuarios, pedile a Claude el hash nuevo.
+        USERS: [
+            { user: 'cavd', hash: '49c78aadb2e38aa8add025ea6ebbaa97eb13647a327edd82bcd062abcb51c9f7' },
+        ],
+        SESSION_KEY: 'ratavoley_session_v1',
+
+        async sha256(text) {
+            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+            return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+        },
+
+        isLogged() {
+            try {
+                const u = localStorage.getItem(this.SESSION_KEY);
+                return !!u && this.USERS.some(x => x.user === u);
+            } catch (e) { return !!this.state.sessionUser; }
+        },
+
+        async login(ev) {
+            if (ev) ev.preventDefault();
+            const user = (document.getElementById('login-user').value || '').trim().toLowerCase();
+            const pass = document.getElementById('login-pass').value || '';
+            const errEl = document.getElementById('login-error');
+            let ok = false;
+            try {
+                const h = await this.sha256('ratavoley|' + user + '|' + pass);
+                ok = this.USERS.some(x => x.user === user && x.hash === h);
+            } catch (e) {
+                errEl.textContent = 'Este navegador no permite verificar la contraseña. Abrí la página desde su link https.';
+                return;
+            }
+            if (!ok) {
+                errEl.textContent = 'Usuario o contraseña incorrectos.';
+                document.getElementById('login-pass').value = '';
+                return;
+            }
+            this.state.sessionUser = user;
+            try { localStorage.setItem(this.SESSION_KEY, user); } catch (e) {}
+            this.state.view = 'home';
+            this.render();
+        },
+
+        logout() {
+            this.state.sessionUser = null;
+            try { localStorage.removeItem(this.SESSION_KEY); } catch (e) {}
+            this.state.view = 'home';
+            this.render();
+        },
+
+        renderLogin() {
+            return `
+                <div class="flex-1 flex flex-col items-center justify-center p-6 bg-slate-900">
+                    <form onsubmit="app.login(event)" class="w-full max-w-sm bg-slate-800/60 border border-slate-700 rounded-3xl p-8 shadow-2xl">
+                        <h1 class="text-3xl sm:text-4xl font-black text-white mb-1 tracking-tight text-center">Villa Dora <span class="text-blue-500">Voley</span></h1>
+                        <p class="text-xs text-slate-500 mb-8 font-bold uppercase tracking-widest text-center">Por Agustin Ramseyer</p>
+                        <label class="block text-xs text-slate-400 mb-1.5 font-bold uppercase" for="login-user">Usuario</label>
+                        <input id="login-user" type="text" autocomplete="username" autocapitalize="none" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white mb-4 outline-none focus:ring-2 focus:ring-blue-500">
+                        <label class="block text-xs text-slate-400 mb-1.5 font-bold uppercase" for="login-pass">Contraseña</label>
+                        <input id="login-pass" type="password" autocomplete="current-password" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white mb-2 outline-none focus:ring-2 focus:ring-blue-500">
+                        <p id="login-error" class="text-red-400 text-sm font-semibold min-h-[1.5rem] mb-2"></p>
+                        <button type="submit" class="btn-press w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl text-lg shadow-lg shadow-blue-600/30">Ingresar</button>
+                    </form>
+                </div>
+            `;
+        },
+
+        // ================= CATEGORÍAS =================
+        CATEGORIES: ['Primera', 'S21', 'S18', 'S16', 'S14', 'S13', 'S12'],
+        BRANCHES: [{ v: 'Fem', l: 'Femenino' }, { v: 'Masc', l: 'Masculino' }],
+        LETTERS: ['', 'A', 'B', 'C', 'D', 'E'],
+
+        teamLabel(m) {
+            if (!m) return '';
+            return [m.category || '', m.teamLetter || ''].join(' ').trim() + (m.branch ? ' · ' + m.branch : '');
+        },
+
+        teamKey(m) {
+            return [m.category || '', m.teamLetter || '', m.branch || ''].join('|');
+        },
+
+        // ================= PERSISTENCIA (varios partidos, en este navegador) =================
+        STORAGE_KEY: 'ratavoley_data_v2',
+        OLD_KEY: 'ratavoley_match_v1',
+        _seq: 0,
+
+        // Guarda en el dispositivo y marca el partido abierto para subirlo a la nube
+        save() {
+            this.saveLocal();
+            this.markDirty(this.state.currentMatch);
+        },
+
+        saveLocal() {
+            try {
+                const data = {
+                    matches: this.state.matches,
+                    currentId: this.state.currentMatch ? this.state.currentMatch.id : null,
+                    filters: this.state.filters,
+                };
+                localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
+                this.state.storageFull = false;
+            } catch (e) {
+                if (!this.state.storageFull) {
+                    this.state.storageFull = true;
+                    this.showDialog({ title: 'Memoria llena', message: 'No se pudo guardar en este dispositivo: la memoria del navegador está llena. Borrá partidos viejos desde el Historial.', onlyOk: true });
+                }
+            }
+        },
+
+        load() {
+            try {
+                const raw = localStorage.getItem(this.STORAGE_KEY);
+                if (raw) {
+                    const d = JSON.parse(raw);
+                    this.state.matches = Array.isArray(d.matches) ? d.matches.filter(m => m && Array.isArray(m.players) && Array.isArray(m.actions)) : [];
+                    if (d.filters) this.state.filters = Object.assign(this.state.filters, d.filters);
+                    this.state.filters.letter = 'all';
+                    this.state.currentMatch = this.state.matches.find(m => m.id === d.currentId) || null;
+                } else {
+                    // Migración: partido guardado con la versión anterior
+                    const old = localStorage.getItem(this.OLD_KEY);
+                    if (old) {
+                        const m = JSON.parse(old);
+                        if (m && Array.isArray(m.players) && Array.isArray(m.actions)) {
+                            m.branch = m.branch || 'Fem';
+                            m.teamLetter = m.teamLetter || '';
+                            if (!this.CATEGORIES.includes(m.category)) m.category = 'Primera';
+                            this.state.matches = [m];
+                            this.state.currentMatch = m;
+                            this.save();
+                        }
+                        localStorage.removeItem(this.OLD_KEY);
+                    }
+                }
+            } catch (e) { /* dato corrupto o almacenamiento bloqueado */ }
+        },
+
+        // ================= VENTANA DE CONFIRMACIÓN PROPIA =================
+        // Las ventanas del navegador (confirm/alert) pueden estar bloqueadas dentro de la página publicada.
+        showDialog({ title, message, confirmText = 'Aceptar', cancelText = 'Cancelar', danger = false, onConfirm = null, onlyOk = false }) {
+            this.closeDialog();
+            const wrap = document.createElement('div');
+            wrap.id = 'app-dialog';
+            wrap.className = 'fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 bg-black/70';
+            wrap.innerHTML = `
+                <div role="dialog" aria-modal="true" class="w-full max-w-md bg-slate-800 border border-slate-600 rounded-3xl p-6 shadow-2xl">
+                    <h3 data-title class="text-xl font-black text-white mb-2"></h3>
+                    <p data-msg class="text-slate-300 text-sm font-semibold leading-relaxed mb-6"></p>
+                    <div class="flex gap-3 justify-end">
+                        ${onlyOk ? '' : '<button data-cancel class="btn-press flex-1 sm:flex-none px-5 py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-bold"></button>'}
+                        <button data-ok class="btn-press flex-1 sm:flex-none px-5 py-3 rounded-xl ${danger ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'} text-white font-bold"></button>
+                    </div>
+                </div>`;
+            wrap.querySelector('[data-title]').textContent = title || '';
+            wrap.querySelector('[data-msg]').textContent = message || '';
+            const ok = wrap.querySelector('[data-ok]'); ok.textContent = confirmText;
+            const cancel = wrap.querySelector('[data-cancel]');
+            if (cancel) { cancel.textContent = cancelText; cancel.onclick = () => this.closeDialog(); }
+            ok.onclick = () => { this.closeDialog(); if (onConfirm) onConfirm(); };
+            wrap.addEventListener('click', e => { if (e.target === wrap) this.closeDialog(); });
+            document.body.appendChild(wrap);
+            ok.focus();
+        },
+
+        closeDialog() {
+            const d = document.getElementById('app-dialog');
+            if (d) d.remove();
+        },
+
+        // Escapa texto para insertarlo seguro en el HTML (nombres con comillas, <, etc.)
+        esc(s) {
+            return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        },
+
+        newId() {
+            this._seq = (this._seq + 1) % 1000;
+            return Date.now() * 1000 + this._seq;
+        },
+
+        init() {
+            this.load();
+            this.render();
+            this.initCloud();
+            // Si llega un cambio de otro dispositivo mientras se escribe en un campo, se redibuja al salir del campo
+            document.addEventListener('focusout', () => {
+                if (this._deferRender) setTimeout(() => { if (!this.isTyping()) { this._deferRender = false; this.render(); } }, 0);
+            });
+        },
+
+        // ================= NUBE (base de datos compartida de la página) =================
+        // Cada partido es un documento en "matches/<id>". Si la nube no está disponible
+        // (página abierta fuera de Claude, sin sesión, etc.) la app sigue con el guardado local.
+        db: null,
+        pending: new Set(),     // partidos con cambios sin subir
+        deleted: new Set(),     // partidos borrados por subir
+        lastSent: new Map(),    // id -> JSON de lo último subido (para no reescribir lo mismo)
+        CLOUD_MIGRATED_KEY: 'ratavoley_cloud_migrated_v1',
+
+        cloudStatus() { return this.state.cloud.status; },
+        canWrite() { return this.state.cloud.canWrite; },
+
+        isTyping() {
+            const a = document.activeElement;
+            return !!a && document.getElementById('app').contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA');
+        },
+
+        async initCloud() {
+            if (!window.claude || typeof window.claude.use !== 'function') { this.setCloud('local'); return; }
+            this.setCloud('connecting');
+            let db = null;
+            try { db = await window.claude.use('db'); } catch (e) { db = null; }
+            if (!db) { this.setCloud('local'); return; }
+            this.db = db;
+            let canWrite = true;
+            try {
+                const user = await window.claude.use('user');
+                if (user) { const c = await user.can('data.write'); if (c === false) canWrite = false; }
+            } catch (e) { /* sin datos: se decide con la primera escritura */ }
+            this.state.cloud.canWrite = canWrite;
+            this.setCloud(canWrite ? 'online' : 'readonly');
+            this._firstSnap = true;
+            this.unsub = db.collection('matches').onSnapshot(
+                snap => this.onCloudSnapshot(snap),
+                err => { this.setCloud(err && err.code === 'revoked' ? 'local' : 'error'); }
+            );
+        },
+
+        setCloud(status) {
+            this.state.cloud.status = status;
+            const el = document.getElementById('cloud-status');
+            if (el) el.outerHTML = this.renderCloudBadge();
+        },
+
+        renderCloudBadge() {
+            const st = this.state.cloud.status;
+            const saving = this.pending.size || this._flushing;
+            const map = {
+                local:      ['Guardado solo en este dispositivo', 'Local', 'bg-slate-700/60 text-slate-300 border-slate-600'],
+                connecting: ['Conectando…', '…', 'bg-slate-700/60 text-slate-300 border-slate-600'],
+                online:     [saving ? 'Guardando…' : 'Sincronizado', saving ? 'Guardando' : 'En la nube', 'bg-emerald-600/20 text-emerald-300 border-emerald-600/40'],
+                readonly:   ['Solo lectura · en vivo', 'Lectura', 'bg-sky-600/20 text-sky-300 border-sky-600/40'],
+                error:      ['Sin conexión · se guarda local', 'Sin conexión', 'bg-amber-600/20 text-amber-300 border-amber-600/40'],
+            };
+            const [txt, short, cls] = map[st] || map.local;
+            return `<span id="cloud-status" title="${txt}" class="text-[10px] sm:text-xs font-bold px-2 py-1 rounded-lg border whitespace-nowrap ${cls}"><span class="hidden sm:inline">${txt}</span><span class="sm:hidden">${short}</span></span>`;
+        },
+
+        onCloudSnapshot(snap) {
+            const remote = new Map();
+            snap.docs.forEach(d => { const data = d.data(); if (data && Array.isArray(data.actions) && Array.isArray(data.players)) remote.set(d.id, data); });
+
+            // Primera vez en este dispositivo con permiso de escritura: sube los partidos que solo estaban acá
+            let migrating = false;
+            if (this._firstSnap) {
+                this._firstSnap = false;
+                let migrated = false;
+                try { migrated = localStorage.getItem(this.CLOUD_MIGRATED_KEY) === '1'; } catch (e) {}
+                if (this.canWrite() && !migrated) {
+                    migrating = true;
+                    this.state.matches.forEach(m => { if (!remote.has(m.id)) this.pending.add(m.id); });
+                    try { localStorage.setItem(this.CLOUD_MIGRATED_KEY, '1'); } catch (e) {}
+                }
+            }
+
+            const busy = id => this.pending.has(id) || (this._writing && this._writing.has(id));
+            const next = [];
+            const seen = new Set();
+            remote.forEach((data, id) => {
+                if (this.deleted.has(id)) return;
+                seen.add(id);
+                const local = this.state.matches.find(m => m.id === id);
+                if (local && busy(id)) { next.push(local); return; }
+                const json = JSON.stringify(data);
+                if (local && JSON.stringify(local) === json) { next.push(local); return; }
+                const copy = JSON.parse(json);
+                this.lastSent.set(id, json);
+                next.push(copy);
+            });
+            // Partidos locales que todavía no llegaron a la nube (recién creados o migrando)
+            this.state.matches.forEach(m => { if (!seen.has(m.id) && (busy(m.id) || migrating)) next.push(m); });
+
+            const curId = this.state.currentMatch && this.state.currentMatch.id;
+            this.state.matches = next;
+            this.state.currentMatch = curId ? (next.find(m => m.id === curId) || null) : null;
+            if (!this.state.currentMatch && this.state.view !== 'home') this.state.view = 'home';
+
+            this.saveLocal();
+            if (this.pending.size) this.scheduleFlush();
+            if (this.isTyping()) { this._deferRender = true; return; }
+            this.render();
+        },
+
+        markDirty(m) {
+            if (!m || !this.db || !this.canWrite()) return;
+            this.pending.add(m.id);
+            this.scheduleFlush();
+        },
+
+        scheduleFlush(delay = 700) {
+            clearTimeout(this._flushTimer);
+            this._flushTimer = setTimeout(() => this.flush(), delay);
+        },
+
+        // Sube los cambios de a uno por documento (nunca dos escrituras a la vez sobre el mismo partido)
+        async flush() {
+            if (!this.db || !this.canWrite()) return;
+            if (this._flushing) { this._flushAgain = true; return; }
+            this._flushing = true;
+            this._writing = new Set();
+            this.setCloud(this.state.cloud.status === 'error' ? 'online' : this.state.cloud.status);
+            try {
+                while (this.pending.size) {
+                    const ids = [...this.pending];
+                    this.pending.clear();
+                    for (const id of ids) {
+                        this._writing.add(id);
+                        try {
+                            const ref = this.db.collection('matches').doc(id);
+                            if (this.deleted.has(id)) {
+                                await ref.delete();
+                                this.deleted.delete(id);
+                                this.lastSent.delete(id);
+                            } else {
+                                const m = this.state.matches.find(x => x.id === id);
+                                if (m) {
+                                    const json = JSON.stringify(m);
+                                    if (this.lastSent.get(id) !== json) {
+                                        await ref.set(JSON.parse(json));
+                                        this.lastSent.set(id, json);
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            const code = e && e.code;
+                            if (code === 'invalid_argument') {
+                                // Esta persona no tiene permiso para escribir: queda en solo lectura
+                                this.state.cloud.canWrite = false;
+                                this.pending.clear();
+                                this.setCloud('readonly');
+                                this.render();
+                                return;
+                            }
+                            if (code === 'quota_exceeded') {
+                                this.showDialog({ title: 'Nube llena', message: 'La base de datos compartida está llena. Borrá partidos viejos para seguir guardando en la nube.', onlyOk: true });
+                            } else {
+                                this.pending.add(id);
+                                this.setCloud('error');
+                                this.scheduleFlush(4000 + Math.random() * 2000);
+                                return;
+                            }
+                        } finally {
+                            this._writing.delete(id);
+                        }
+                    }
+                }
+                this.setCloud('online');
+            } finally {
+                this._flushing = false;
+                if (this._flushAgain) { this._flushAgain = false; this.scheduleFlush(100); }
+            }
+        },
+
+        changeView(view) {
+            this.state.view = view;
+            this.render();
+        },
+
+        // Partido para "Continuar": el abierto si sigue en juego; si no, el último empezado sin terminar
+        resumeCandidate() {
+            const live = m => m && m.started && !this.calculateScore(m).matchOver;
+            if (live(this.state.currentMatch)) return this.state.currentMatch;
+            return this.state.matches.filter(live)
+                .sort((a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || '')))[0] || null;
+        },
+
+        resumeMatch() {
+            const m = this.resumeCandidate();
+            if (!m) return;
+            this.openMatch(m.id);
+        },
+
+        openMatch(id) {
+            const m = this.state.matches.find(x => x.id === id);
+            if (!m) return;
+            this.state.currentMatch = m;
+            this.resetTrackerState();
+            const over = this.calculateScore(m).matchOver;
+            this.state.winDismissed = over;
+            if (!this.canWrite()) { this.state.winDismissed = true; this.changeView('stats'); return; }
+            this.changeView(over ? 'stats' : (m.started ? 'tracker' : 'setup'));
+        },
+
+        deleteMatch(id) {
+            if (!this.canWrite()) return;
+            const m = this.state.matches.find(x => x.id === id);
+            if (!m) return;
+            this.showDialog({
+                title: 'Borrar partido',
+                message: `${m.localClub} vs ${m.visitorClub} (${this.formatDate(m.date)}). Se borra en todos los dispositivos y no se puede deshacer.`,
+                confirmText: 'Borrar', danger: true,
+                onConfirm: () => this.doDeleteMatch(id),
+            });
+        },
+
+        doDeleteMatch(id) {
+            if (!this.canWrite()) return;
+            this.state.matches = this.state.matches.filter(x => x.id !== id);
+            if (this.state.currentMatch && this.state.currentMatch.id === id) this.state.currentMatch = null;
+            if (this.db && this.canWrite()) { this.deleted.add(id); this.pending.add(id); this.scheduleFlush(100); }
+            this.render();
+        },
+
+        setFilter(field, value) {
+            this.state.filters[field] = value;
+            this.render();
+        },
+
+        formatDate(d) {
+            if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return d || '';
+            const [y, mo, da] = d.split('-');
+            return `${da}/${mo}/${y}`;
+        },
+
+        renderHome() {
+            const cur = this.resumeCandidate();
+            const rw = this.canWrite();
+            const f = this.state.filters;
+            const all = this.state.matches.slice().sort((a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || '')));
+
+            const opt = (field, value, label) => `<option value="${value}" ${f[field] === value ? 'selected' : ''}>${label}</option>`;
+            const catSelect = `<select onchange="app.setFilter('category', this.value)" class="w-full bg-slate-900 border border-slate-600 rounded-xl px-3 py-2.5 text-white font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500">${opt('category', 'all', 'Todas')}${this.CATEGORIES.map(c => opt('category', c, c)).join('')}</select>`;
+            const branchSelect = `<select onchange="app.setFilter('branch', this.value)" class="w-full bg-slate-900 border border-slate-600 rounded-xl px-3 py-2.5 text-white font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500">${opt('branch', 'all', 'Ambas')}${this.BRANCHES.map(b => opt('branch', b.v, b.l)).join('')}</select>`;
+
+            const list = all.filter(m =>
+                (f.category === 'all' || m.category === f.category) &&
+                (f.branch === 'all' || m.branch === f.branch) &&
+                (f.letter === 'all' || (f.letter === 'none' ? !m.teamLetter : m.teamLetter === f.letter))
+            );
+
+            const cards = list.map(m => {
+                const sc = this.calculateScore(m);
+                let status, statusCls;
+                if (sc.matchOver) {
+                    const won = sc.localSets > sc.visitorSets;
+                    status = won ? 'Ganado' : 'Perdido';
+                    statusCls = won ? 'bg-green-600/20 text-green-400 border-green-600/40' : 'bg-red-600/20 text-red-400 border-red-600/40';
+                } else if (m.started) {
+                    status = 'En juego'; statusCls = 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40';
+                } else {
+                    status = 'Sin empezar'; statusCls = 'bg-slate-700/50 text-slate-400 border-slate-600';
+                }
+                const sets = sc.sets.map(s => `${s.local}-${s.visitor}`).join(' · ') + (!sc.matchOver && m.started && (sc.local || sc.visitor) ? (sc.sets.length ? ' · ' : '') + `(${sc.local}-${sc.visitor})` : '');
+                return `
+                    <div class="bg-slate-800/70 border border-slate-700/60 rounded-2xl p-3 sm:p-4 flex flex-wrap sm:flex-nowrap items-center gap-3 sm:gap-4">
+                        <div class="w-20 sm:w-24 shrink-0 text-center">
+                            <div class="text-2xl sm:text-3xl font-black text-white">${sc.localSets}-${sc.visitorSets}</div>
+                            <span class="inline-block mt-1 text-[10px] font-black uppercase px-2 py-0.5 rounded border ${statusCls}">${status}</span>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-1 flex-wrap">
+                                <span class="text-[11px] font-black bg-blue-600/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded">${this.esc(this.teamLabel(m))}</span>
+                                <span class="text-xs text-slate-400 font-semibold">${this.formatDate(m.date)}${m.time ? ' · ' + this.esc(m.time) : ''}</span>
+                                <span class="text-xs text-slate-500 truncate">${this.esc(m.tournament)}</span>
+                            </div>
+                            <div class="font-black text-white truncate"><span class="text-blue-400">${this.esc(m.localClub)}</span> <span class="text-slate-500 font-semibold">vs</span> <span class="text-red-400">${this.esc(m.visitorClub)}</span></div>
+                            <div class="text-xs text-slate-400 font-semibold mt-0.5">${sets || 'Sin puntos cargados'}</div>
+                        </div>
+                        <div class="flex gap-2 shrink-0 w-full sm:w-auto">
+                            <button onclick="app.openMatch('${this.esc(m.id)}')" class="btn-press flex-1 sm:flex-none bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm px-4 py-2.5 rounded-xl whitespace-nowrap">${sc.matchOver || !rw ? (m.started && !sc.matchOver ? 'Ver en vivo' : 'Ver stats') : 'Abrir'}</button>
+                            ${rw ? `<button onclick="app.deleteMatch('${this.esc(m.id)}')" title="Borrar partido" class="btn-press bg-slate-900/60 hover:bg-red-600 text-slate-400 hover:text-white px-3 py-2.5 rounded-xl border border-slate-700">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                            </button>` : ''}
+                        </div>
+                    </div>`;
+            }).join('');
+
+            const emptyMsg = all.length === 0
+                ? 'Todavía no hay partidos guardados. Empezá uno nuevo.'
+                : 'No hay partidos con estos filtros.';
+
+            const resumeHtml = cur ? `
+                <button onclick="app.resumeMatch()" class="btn-press w-full bg-green-600 hover:bg-green-500 text-white font-bold py-4 px-6 rounded-2xl text-lg shadow-xl shadow-green-600/30 flex flex-col items-center">
+                    <span>${rw ? 'Continuar partido' : 'Ver partido en vivo'}</span>
+                    <span class="text-xs font-semibold opacity-90 mt-1 truncate max-w-full">${this.esc(cur.localClub)} vs ${this.esc(cur.visitorClub)} · ${this.esc(this.teamLabel(cur))}</span>
+                </button>` : '';
+
+            return `
+                <div class="h-full flex flex-col bg-slate-900">
+                    <div class="bg-slate-800/90 border-b border-slate-700 py-3 px-3 lg:px-6 flex justify-between items-center gap-2 shrink-0">
+                        <div class="text-lg sm:text-2xl font-black text-white tracking-tight whitespace-nowrap">Villa Dora <span class="text-blue-500">Voley</span> <span class="hidden md:inline text-[10px] text-slate-500 font-bold uppercase tracking-widest ml-2">Por Agustin Ramseyer</span></div>
+                        <div class="flex items-center gap-2 sm:gap-3">
+                            ${this.renderCloudBadge()}
+                            <span class="hidden sm:inline text-xs text-slate-400 font-semibold">${this.esc(this.state.sessionUser || (function(){ try { return localStorage.getItem(app.SESSION_KEY) || ''; } catch(e) { return ''; } })())}</span>
+                            <button onclick="app.logout()" class="btn-press text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg font-semibold whitespace-nowrap">Salir</button>
+                        </div>
+                    </div>
+                    <div data-scroll="home" class="flex-1 min-h-0 flex flex-col lg:flex-row gap-3 lg:gap-5 p-3 lg:p-5 overflow-y-auto lg:overflow-hidden">
+                        <div class="w-full lg:w-72 shrink-0 flex flex-col sm:flex-row lg:flex-col gap-3">
+                            ${resumeHtml}
+                            ${rw ? `<button onclick="app.startSetup()" class="btn-press w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-6 rounded-2xl text-lg shadow-xl shadow-blue-600/30">Nuevo partido</button>` : ''}
+                            <div class="hidden lg:block mt-2 text-xs text-slate-500 font-semibold leading-relaxed">${all.length} partido${all.length === 1 ? '' : 's'} ${this.db ? 'en la nube.' : (all.length === 1 ? 'guardado en este dispositivo.' : 'guardados en este dispositivo.')}${rw ? '' : ' Estás en modo lectura: ves los partidos en vivo pero no podés cargar ni borrar.'}</div>
+                        </div>
+                        <div class="lg:flex-1 min-w-0 flex flex-col bg-slate-800/40 border border-slate-700/80 rounded-3xl p-3 sm:p-5 lg:min-h-0">
+                            <h2 class="text-base sm:text-lg font-black text-white uppercase tracking-widest mb-3 sm:mb-4">Historial de partidos</h2>
+                            <div class="space-y-2 mb-4 shrink-0">
+                                <div class="grid grid-cols-2 gap-3 sm:max-w-md">
+                                    <label class="block"><span class="block text-[10px] text-slate-500 font-black uppercase tracking-widest mb-1">Categoría</span>${catSelect}</label>
+                                    <label class="block"><span class="block text-[10px] text-slate-500 font-black uppercase tracking-widest mb-1">Rama</span>${branchSelect}</label>
+                                </div>
+                            </div>
+                            <div data-scroll="home-list" class="lg:flex-1 lg:overflow-y-auto lg:pr-2 space-y-3">
+                                ${cards || `<div class="text-center text-slate-500 font-bold py-16">${emptyMsg}</div>`}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        },
+
+        startSetup() {
+            if (!this.canWrite()) return;
+            this.state.winDismissed = false;
+            const now = new Date();
+            const dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+            const timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+
+            const defaultPlayers = this.defaultPlayers();
+
+            // Arranca con la categoría/rama/equipo que esté filtrada en el historial (si hay una elegida)
+            const f = this.state.filters;
+            const m = {
+                id: Date.now().toString(),
+                tournament: 'Torneo Oficial',
+                localClub: 'Mi Equipo',
+                visitorClub: 'Visitante',
+                category: f.category !== 'all' ? f.category : 'Primera',
+                branch: f.branch !== 'all' ? f.branch : 'Fem',
+                teamLetter: (f.letter !== 'all' && f.letter !== 'none') ? f.letter : '',
+                date: dateStr,
+                time: timeStr,
+                matchType: 'bestOf5',
+                started: false,
+                players: defaultPlayers,
+                actions: []
+            };
+            const prev = this.lastMatchOfTeam(m);
+            if (prev) { m.players = JSON.parse(JSON.stringify(prev.players)); m.localClub = prev.localClub; m.rosterFrom = prev.id; }
+            this.state.matches.push(m);
+            this.state.currentMatch = m;
+            this.changeView('setup');
+        },
+
+        defaultPlayers() {
+            const posArr = ['Armador', 'Punta', 'Central', 'Opuesto', 'Libero'];
+            return Array.from({length: 14}, (_, i) => ({ id: i+1, number: i+1, name: `Jugadora ${i+1}`, position: posArr[i % 5] }));
+        },
+
+        cancelSetup() {
+            const m = this.state.currentMatch;
+            if (m && !m.started && m.actions.length === 0) {
+                this.state.matches = this.state.matches.filter(x => x.id !== m.id);
+                this.state.currentMatch = null;
+            }
+            this.changeView('home');
+        },
+
+        // Último partido (distinto del actual) del mismo equipo: categoría + letra + rama
+        lastMatchOfTeam(m) {
+            const key = this.teamKey(m);
+            return this.state.matches
+                .filter(x => x.id !== m.id && this.teamKey(x) === key && x.players && x.players.length)
+                .sort((a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || '')))[0] || null;
+        },
+
+        // Cambio de categoría / rama / letra: si todavía no hay acciones, trae el plantel de ese equipo
+        updateTeamField(field, value) {
+            if (!this.canWrite()) return;
+            const m = this.state.currentMatch;
+            m[field] = value;
+            if (m.actions.length === 0) {
+                const prev = this.lastMatchOfTeam(m);
+                if (prev) { m.players = JSON.parse(JSON.stringify(prev.players)); m.localClub = prev.localClub; m.rosterFrom = prev.id; }
+                else if (m.rosterFrom) {
+                    // El plantel era de otro equipo: vuelve al plantel genérico
+                    m.players = this.defaultPlayers(); m.localClub = 'Mi Equipo'; m.rosterFrom = null;
+                }
+            }
+            this.render();
+        },
+
+        updateMatchField(field, value) {
+            if (!this.canWrite()) return;
+            // Sin redibujar: así el toque siguiente (otro campo o "A la Cancha") no se pierde
+            this.state.currentMatch[field] = value;
+            this.save();
+        },
+
+        updatePlayer(id, field, value) {
+            if (!this.canWrite()) return;
+            const player = this.state.currentMatch.players.find(p => p.id === id);
+            if (!player) return;
+            if (field === 'number') {
+                const n = parseInt(value, 10);
+                player.number = Number.isFinite(n) ? n : player.number;
+            } else {
+                player[field] = value;
+            }
+            this.save();
+        },
+
+        removePlayer(id) {
+            if (!this.canWrite()) return;
+            const m = this.state.currentMatch;
+            const used = m.actions.filter(a => a.playerId === id).length;
+            if (used > 0) {
+                const p = m.players.find(x => x.id === id);
+                this.showDialog({
+                    title: 'Borrar jugadora',
+                    message: `${p ? p.name : 'Esta jugadora'} tiene ${used} acciones cargadas. Si la borrás, esas acciones quedan sin jugadora en las stats.`,
+                    confirmText: 'Borrar igual', danger: true,
+                    onConfirm: () => this.doRemovePlayer(id),
+                });
+                return;
+            }
+            this.doRemovePlayer(id);
+        },
+
+        doRemovePlayer(id) {
+            const m = this.state.currentMatch;
+            m.players = m.players.filter(p => p.id !== id);
+            this.render();
+        },
+
+        addPlayer() {
+            if (!this.canWrite()) return;
+            const maxId = this.state.currentMatch.players.reduce((max, p) => p.id > max ? p.id : max, 0);
+            this.state.currentMatch.players.push({ 
+                id: maxId + 1, 
+                number: maxId + 1, 
+                name: 'Nueva',
+                position: 'Punta'
+            });
+            this.render();
+        },
+
+        startMatch() {
+            if (!this.canWrite()) return;
+            if (!this.state.currentMatch.localClub || this.state.currentMatch.localClub.trim() === '') {
+                this.state.currentMatch.localClub = 'Local';
+            }
+            if (!this.state.currentMatch.visitorClub || this.state.currentMatch.visitorClub.trim() === '') {
+                this.state.currentMatch.visitorClub = 'Visitante';
+            }
+            this.state.currentMatch.started = true;
+            this.resetTrackerState();
+            this.changeView('tracker');
+        },
+
+        renderSetup() {
+            const m = this.state.currentMatch;
+            const posOptions = ['Armador', 'Punta', 'Central', 'Opuesto', 'Libero'];
+            
+            let playersHtml = m.players.map(p => `
+                <div class="flex items-center gap-2 bg-slate-800 p-2 rounded-xl border border-slate-700/60 mb-2">
+                    <input type="number" inputmode="numeric" value="${p.number}" onchange="app.updatePlayer(${p.id}, 'number', this.value)" class="w-12 sm:w-14 shrink-0 bg-slate-900 border border-slate-700 rounded-lg p-2 text-center text-white font-bold text-sm" placeholder="#">
+                    <input type="text" value="${this.esc(p.name)}" onchange="app.updatePlayer(${p.id}, 'name', this.value)" class="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg p-2 text-white text-sm" placeholder="Nombre">
+                    <select onchange="app.updatePlayer(${p.id}, 'position', this.value)" class="w-24 sm:w-28 shrink-0 bg-slate-900 border border-slate-700 rounded-lg p-2 text-white text-xs font-semibold focus:ring-2 focus:ring-blue-500 outline-none">
+                        ${posOptions.map(pos => `<option value="${pos}" ${p.position === pos ? 'selected' : ''}>${pos}</option>`).join('')}
+                    </select>
+                    <button onclick="app.removePlayer(${p.id})" class="shrink-0 bg-red-500/20 hover:bg-red-500 text-red-400 hover:text-white p-2 rounded-lg btn-press">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                </div>
+            `).join('');
+
+            return `
+                <div class="h-full flex flex-col bg-slate-900 select-none">
+                    <div class="bg-slate-800/90 backdrop-blur py-3 px-3 lg:px-6 shadow flex flex-wrap gap-2 justify-between items-center border-b border-slate-700 shrink-0">
+                        <h2 class="text-base lg:text-lg font-bold flex items-center gap-2 text-white">Configuración <span class="hidden sm:inline text-xs text-slate-400 font-normal">| Villa Dora Voley (Agustin Ramseyer)</span></h2>
+                        <div class="flex items-center gap-2 lg:gap-3">
+                            <button onclick="app.cancelSetup()" class="px-4 py-2 text-slate-400 hover:text-white font-medium text-sm">${m.started ? 'Inicio' : 'Cancelar'}</button>
+                            <button onclick="app.startMatch()" class="btn-press bg-green-600 hover:bg-green-500 text-white font-bold py-2.5 px-4 lg:px-6 rounded-xl shadow-lg text-sm whitespace-nowrap">${m.started ? 'Volver a la Cancha ➔' : 'A la Cancha ➔'}</button>
+                        </div>
+                    </div>
+                    
+                    <div data-scroll="setup" class="flex-1 min-h-0 overflow-y-auto lg:overflow-hidden p-3 lg:p-4 flex flex-col lg:flex-row gap-3 lg:gap-4">
+                        <!-- Columna Datos Partido -->
+                        <div class="w-full lg:w-5/12 shrink-0 lg:shrink bg-slate-800/40 backdrop-blur rounded-2xl p-4 lg:p-5 border border-slate-700/80 flex flex-col lg:overflow-y-auto">
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-blue-400 mb-4 pb-2 border-b border-slate-700">Datos del Encuentro</h3>
+                            
+                            <div class="mb-4 bg-blue-950/30 p-4 rounded-xl border border-blue-800/40">
+                                <label class="block text-xs text-blue-300 mb-2 font-bold uppercase">Equipo</label>
+                                <div class="grid grid-cols-3 gap-2">
+                                    <div>
+                                        <span class="block text-[10px] text-slate-500 mb-1 font-bold uppercase">Categoría</span>
+                                        <select onchange="app.updateTeamField('category', this.value)" class="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                                            ${this.CATEGORIES.map(c => `<option value="${c}" ${m.category === c ? 'selected' : ''}>${c}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <span class="block text-[10px] text-slate-500 mb-1 font-bold uppercase">Equipo</span>
+                                        <select onchange="app.updateTeamField('teamLetter', this.value)" class="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                                            ${this.LETTERS.map(l => `<option value="${l}" ${(m.teamLetter || '') === l ? 'selected' : ''}>${l || 'Sin letra'}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <span class="block text-[10px] text-slate-500 mb-1 font-bold uppercase">Rama</span>
+                                        <select onchange="app.updateTeamField('branch', this.value)" class="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                                            ${this.BRANCHES.map(b => `<option value="${b.v}" ${m.branch === b.v ? 'selected' : ''}>${b.l}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                </div>
+                                ${(() => { const src = m.rosterFrom && this.state.matches.find(x => x.id === m.rosterFrom); return src ? `<p class="text-[11px] text-blue-300/80 font-semibold mt-2">Plantel cargado del último partido de ${this.esc(this.teamLabel(m))} (${this.formatDate(src.date)} vs ${this.esc(src.visitorClub)}).</p>` : ''; })()}
+                            </div>
+
+                            <div class="mb-4 bg-slate-900/50 p-4 rounded-xl border border-slate-700/50">
+                                <label class="block text-xs text-slate-400 mb-1.5 font-bold uppercase">Formato del Partido</label>
+                                <select onchange="app.updateMatchField('matchType', this.value)" class="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                                    <option value="bestOf3" ${m.matchType === 'bestOf3' ? 'selected' : ''}>Al Mejor de 3 Sets</option>
+                                    <option value="bestOf5" ${m.matchType === 'bestOf5' ? 'selected' : ''}>Al Mejor de 5 Sets</option>
+                                </select>
+                            </div>
+
+                            <div class="mb-4">
+                                <label class="block text-xs text-slate-400 mb-1.5 font-bold uppercase">Torneo</label>
+                                <input type="text" value="${this.esc(m.tournament)}" onchange="app.updateMatchField('tournament', this.value)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-sm">
+                            </div>
+                            <div class="grid grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <label class="block text-xs text-slate-400 mb-1.5 font-bold uppercase">Mi Equipo (Local)</label>
+                                    <input type="text" value="${this.esc(m.localClub)}" onchange="app.updateMatchField('localClub', this.value)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white font-bold text-sm text-blue-400">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-slate-400 mb-1.5 font-bold uppercase">Equipo Visitante</label>
+                                    <input type="text" value="${this.esc(m.visitorClub)}" onchange="app.updateMatchField('visitorClub', this.value)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white font-bold text-sm text-red-400">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs text-slate-400 mb-1.5 font-bold uppercase">Fecha</label>
+                                    <input type="date" value="${m.date}" onchange="app.updateMatchField('date', this.value)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-slate-400 mb-1.5 font-bold uppercase">Hora</label>
+                                    <input type="time" value="${m.time}" onchange="app.updateMatchField('time', this.value)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-sm">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Columna Jugadoras -->
+                        <div class="w-full lg:w-7/12 shrink-0 lg:shrink bg-slate-800/40 backdrop-blur rounded-2xl p-4 lg:p-5 border border-slate-700/80 flex flex-col lg:h-full lg:overflow-hidden">
+                            <div class="flex justify-between items-center mb-4 pb-2 border-b border-slate-700 shrink-0">
+                                <h3 class="text-xs font-bold uppercase tracking-wider text-blue-400">Plantel Local</h3>
+                                <button onclick="app.addPlayer()" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow btn-press flex items-center gap-1"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg> Añadir Jugadora</button>
+                            </div>
+                            <div data-scroll="setup-players" class="lg:overflow-y-auto lg:flex-1 lg:pr-2">
+                                ${playersHtml}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        },
+
+        resetTrackerState() {
+            this.state.t_team = 'local';
+            this.state.t_player = null;
+            this.state.t_fundamental = null;
+            this.state.t_zoneFrom = null;
+            this.state.t_zoneTo = null;
+        },
+
+        setTeam(team) {
+            this.state.t_team = team;
+            this.state.t_player = null; 
+            this.state.t_fundamental = null;
+            this.state.t_zoneFrom = null;
+            this.state.t_zoneTo = null;
+            this.render();
+        },
+
+        setPlayer(playerId) {
+            this.state.t_player = playerId;
+            this.render();
+        },
+
+        setFundamental(fund) {
+            if (this.state.t_team === 'visitor' && fund === 'recepcion') return; 
+            
+            this.state.t_fundamental = fund;
+            this._scrollTo = 'result';
+            this.state.t_zoneFrom = null;
+            this.state.t_zoneTo = null;
+            
+            this.render();
+        },
+
+        setZone(type, zone) {
+            if (type === 'from') this.state.t_zoneFrom = zone;
+            if (type === 'to') this.state.t_zoneTo = zone;
+            this.render();
+        },
+
+        recordAction(outcome, quality = null) {
+            if (!this.canWrite()) return;
+            if (this.state.t_team === 'local' && !this.state.t_player) return;
+            if (!this.state.t_fundamental) return;
+            
+            const isRec = this.state.t_fundamental === 'recepcion';
+
+            if (isRec && (!this.state.t_zoneFrom || !this.state.t_zoneTo)) return;
+            if (isRec && !quality) return;
+
+            // Partido terminado: no se cargan más acciones (se puede corregir desde Historial o Deshacer)
+            if (this.calculateScore().matchOver) {
+                this.state.winDismissed = false;
+                this.render();
+                return;
+            }
+
+            const action = {
+                id: this.newId(),
+                team: this.state.t_team,
+                playerId: this.state.t_team === 'local' ? this.state.t_player : null,
+                fundamental: this.state.t_fundamental,
+                outcome: outcome, // 'punto', 'error', 'sigue'
+                quality: quality, // '#', '+', '!', '-', '/', 'error', 'punto'
+                zoneFrom: isRec ? this.state.t_zoneFrom : null,
+                zoneTo: isRec ? this.state.t_zoneTo : null,
+                timestamp: new Date().toISOString()
+            };
+
+            this.state.currentMatch.actions.unshift(action);
+            this._scrollTo = 'top';
+            this.resetTrackerState();
+            this.render();
+        },
+
+        deleteAction(actionId) {
+            if (!this.canWrite()) return;
+            this.state.currentMatch.actions = this.state.currentMatch.actions.filter(a => a.id !== actionId);
+            this.state.winDismissed = false;
+            this.render();
+        },
+
+        // Borra la última acción cargada (las acciones se guardan de la más nueva a la más vieja)
+        undoLast() {
+            if (!this.canWrite()) return;
+            const actions = this.state.currentMatch.actions;
+            if (actions.length === 0) return;
+            actions.shift();
+            this.state.winDismissed = false;
+            this.resetTrackerState();
+            this.render();
+        },
+
+        dismissWin() {
+            this.state.winDismissed = true;
+            this.render();
+        },
+
+        describeAction(a) {
+            if (!a) return '';
+            const m = this.state.currentMatch;
+            let who = 'Rival';
+            if (a.team === 'local') {
+                const p = m.players.find(x => x.id === a.playerId);
+                who = p ? '#' + p.number + ' ' + p.name : 'Jugadora eliminada';
+            }
+            const fund = a.fundamental.replace('_', ' ');
+            let res = a.quality ? (a.quality === 'punto' ? 'ACE' : a.quality === 'error' ? 'Error' : a.quality) : (a.outcome === 'punto' ? 'Punto' : 'Error');
+            return `${who} · ${fund} · ${res}`;
+        },
+
+        calculateScore(match = this.state.currentMatch) {
+            if (!match) return { local: 0, visitor: 0, sets: [], localSets: 0, visitorSets: 0, maxSets: 5, setsToWin: 3, countedIds: new Set(), matchOver: false };
+            const actions = match.actions.slice().reverse(); 
+            
+            let local = 0;
+            let visitor = 0;
+            let sets = [];
+            let localSets = 0;
+            let visitorSets = 0;
+            
+            const matchType = match.matchType || 'bestOf5';
+            const maxSets = matchType === 'bestOf3' ? 3 : 5;
+            const setsToWin = Math.ceil(maxSets / 2);
+            const countedIds = new Set();
+
+            for (let i = 0; i < actions.length; i++) {
+                const a = actions[i];
+                if (localSets === setsToWin || visitorSets === setsToWin) break;
+                countedIds.add(a.id);
+
+                let pointFor = null;
+                // Si la acción determina un punto a favor
+                if (a.outcome === 'punto' || a.quality === 'punto') pointFor = a.team;
+                // Si la acción es un error, el punto es del contrario
+                if (a.outcome === 'error' || a.quality === 'error') pointFor = a.team === 'local' ? 'visitor' : 'local';
+
+                if (pointFor === 'local') local++;
+                if (pointFor === 'visitor') visitor++;
+
+                // Verificación de fin de Set
+                const isTieBreak = (sets.length === maxSets - 1);
+                const targetScore = isTieBreak ? 15 : 25;
+
+                if ((local >= targetScore || visitor >= targetScore) && Math.abs(local - visitor) >= 2) {
+                    sets.push({ local, visitor });
+                    if (local > visitor) localSets++;
+                    else visitorSets++;
+                    local = 0;
+                    visitor = 0;
+                }
+            }
+            
+            const matchOver = localSets === setsToWin || visitorSets === setsToWin;
+            return { local, visitor, sets, localSets, visitorSets, maxSets, setsToWin, countedIds, matchOver };
+        },
+
+        renderMatchHeader(activeView) {
+            const m = this.state.currentMatch;
+            const score = this.calculateScore();
+
+            const teamChip = `<span class="bg-blue-600/20 text-blue-300 px-2 py-0.5 rounded border border-blue-500/30 font-bold">${this.esc(this.teamLabel(m))}</span>`;
+            const setHistoryHtml = teamChip + (score.sets.length > 0 
+                ? score.sets.map((s, idx) => `<span class="bg-slate-800/80 text-slate-300 px-2 py-0.5 rounded border border-slate-600 shadow-sm">S${idx+1}: <b>${s.local}-${s.visitor}</b></span>`).join('')
+                : '<span class="text-slate-500 text-xs">Set 1 en juego</span>');
+            // Con el partido terminado, el tablero muestra el último set en lugar de 0-0
+            const lastSet = score.matchOver && score.sets.length ? score.sets[score.sets.length - 1] : null;
+            const shownLocal = lastSet ? lastSet.local : score.local;
+            const shownVisitor = lastSet ? lastSet.visitor : score.visitor;
+
+            let matchWonMsg = '';
+            if (score.matchOver && activeView === 'tracker' && !this.state.winDismissed) {
+                const localWon = score.localSets === score.setsToWin;
+                const winner = localWon ? m.localClub : m.visitorClub;
+                const color = localWon ? 'text-blue-400' : 'text-red-400';
+                const btn = localWon ? 'bg-blue-600 hover:bg-blue-500' : 'bg-red-600 hover:bg-red-500';
+                const setsTxt = score.sets.map(s => `${s.local}-${s.visitor}`).join(' · ');
+                matchWonMsg = `
+                    <div class="fixed inset-0 bg-slate-900/95 z-50 flex flex-col items-center justify-center p-6 text-center">
+                        <div class="text-5xl sm:text-7xl mb-4">🏆</div>
+                        <h1 class="text-3xl sm:text-5xl font-black ${color} mb-2 uppercase break-words max-w-full">¡Ganó ${this.esc(winner)}!</h1>
+                        <p class="text-slate-400 font-bold mb-8">${score.localSets}-${score.visitorSets} &nbsp;(${setsTxt})</p>
+                        <div class="flex flex-col sm:flex-row flex-wrap gap-3 justify-center w-full sm:w-auto max-w-sm sm:max-w-none">
+                            <button onclick="app.changeView('stats')" class="btn-press ${btn} px-6 py-3 rounded-xl text-white font-bold shadow-lg">Ver Estadísticas</button>
+                            <button onclick="app.changeView('history')" class="btn-press bg-slate-700 hover:bg-slate-600 px-6 py-3 rounded-xl text-white font-bold">Revisar Historial</button>
+                            <button onclick="app.undoLast()" class="btn-press bg-slate-700 hover:bg-slate-600 px-6 py-3 rounded-xl text-white font-bold">↶ Deshacer último punto</button>
+                            <button onclick="app.dismissWin()" class="btn-press px-6 py-3 rounded-xl text-slate-400 hover:text-white font-bold">Cerrar</button>
+                        </div>
+                    </div>`;
+            }
+
+            const rw = this.canWrite();
+            const lastAction = m.actions[0];
+            const undoBtn = (activeView === 'tracker' && rw) ? `
+                <button onclick="app.undoLast()" ${lastAction ? '' : 'disabled'} title="${lastAction ? this.esc('Deshacer: ' + this.describeAction(lastAction)) : 'No hay acciones'}"
+                    class="text-xs ${lastAction ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'} px-2.5 sm:px-3 py-2 rounded-lg font-bold btn-press flex items-center gap-1.5 whitespace-nowrap">↶<span class="hidden sm:inline">Deshacer</span></button>` : '';
+            const finishedBadge = score.matchOver
+                ? '<span class="text-[10px] bg-yellow-500/20 text-yellow-400 border border-yellow-500/40 px-2 py-1 rounded-lg font-black uppercase">Finalizado</span>'
+                : (m.started && !rw ? '<span class="text-[10px] bg-red-600/20 text-red-300 border border-red-500/40 px-2 py-1 rounded-lg font-black uppercase animate-pulse">En vivo</span>' : '');
+
+            const navBtn = (view, text) => {
+                const isActive = activeView === view;
+                const activeClasses = isActive ? 'bg-slate-700 text-white shadow-inner ring-1 ring-slate-500' : 'bg-slate-800/50 text-slate-400 hover:text-white hover:bg-slate-700';
+                return `<button onclick="app.changeView('${view}')" class="btn-press px-2.5 sm:px-3 xl:px-4 py-2 rounded-lg font-bold text-xs xl:text-sm transition-all whitespace-nowrap ${activeClasses}">${text}</button>`;
+            };
+
+            return `
+                ${matchWonMsg}
+                <div class="bg-slate-800/90 backdrop-blur border-b border-slate-700 shrink-0 shadow-lg z-20">
+                    <div class="flex flex-wrap lg:flex-nowrap justify-between items-center gap-y-2 gap-x-2 py-2 px-3 lg:px-6">
+                        <!-- Navegación -->
+                        <div class="order-2 lg:order-1 flex gap-1 sm:gap-1.5 lg:gap-2 flex-1 min-w-0">
+                            <button onclick="app.changeView('home')" title="Inicio" class="btn-press px-2.5 py-2 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white hover:bg-slate-700">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l9-9 9 9M5 10v10h5v-6h4v6h5V10"></path></svg>
+                            </button>
+                            ${rw ? navBtn('tracker', 'Cancha') : ''}
+                            ${navBtn('stats', 'Stats')}
+                            ${navBtn('history', 'Historial')}
+                        </div>
+
+                        <!-- Tablero -->
+                        <div class="order-1 lg:order-2 w-full lg:w-auto lg:shrink-0 flex flex-col items-center justify-center">
+                            <div class="flex items-center justify-center gap-2 sm:gap-5 w-full">
+                                <div class="text-right flex-1 lg:flex-none lg:w-24 xl:w-32 min-w-0 truncate text-sm sm:text-lg xl:text-xl font-black text-blue-400 uppercase tracking-wide">${this.esc(m.localClub)}</div>
+                                <div class="flex items-center gap-2 sm:gap-4 shrink-0">
+                                    <span class="text-xl sm:text-3xl font-black text-yellow-500 w-5 sm:w-6 text-center">${score.localSets}</span>
+                                    <div class="bg-slate-900 border border-slate-700 rounded-xl flex items-center px-3 sm:px-4 py-1 sm:py-1.5 shadow-inner">
+                                        <span class="text-3xl sm:text-4xl font-black text-white w-9 sm:w-10 text-center">${shownLocal}</span>
+                                        <span class="text-lg text-slate-600 mx-1.5 sm:mx-3 font-black">-</span>
+                                        <span class="text-3xl sm:text-4xl font-black text-white w-9 sm:w-10 text-center">${shownVisitor}</span>
+                                    </div>
+                                    <span class="text-xl sm:text-3xl font-black text-yellow-500 w-5 sm:w-6 text-center">${score.visitorSets}</span>
+                                </div>
+                                <div class="text-left flex-1 lg:flex-none lg:w-24 xl:w-32 min-w-0 truncate text-sm sm:text-lg xl:text-xl font-black text-red-400 uppercase tracking-wide">${this.esc(m.visitorClub)}</div>
+                            </div>
+                            <div class="text-[10px] flex flex-wrap gap-1.5 sm:gap-2 mt-1.5 justify-center w-full">
+                                ${setHistoryHtml}
+                            </div>
+                        </div>
+
+                        <div class="order-3 flex justify-end items-center gap-1 sm:gap-1.5 lg:gap-2 shrink-0 lg:flex-1 lg:min-w-0">
+                            ${finishedBadge}
+                            ${undoBtn}
+                            ${rw ? `<button onclick="app.changeView('setup')" title="Ajustes" class="text-xs bg-slate-700 text-slate-200 px-2.5 sm:px-3 py-2 rounded-lg hover:bg-slate-600 font-semibold btn-press whitespace-nowrap flex items-center gap-1.5"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg><span class="hidden sm:inline">Ajustes</span></button>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        },
+
+        renderTracker() {
+            const m = this.state.currentMatch;
+            const isLocal = this.state.t_team === 'local';
+            const isVisitor = this.state.t_team === 'visitor';
+            const playerSelected = isVisitor || this.state.t_player !== null;
+            const fundamentalSelected = this.state.t_fundamental !== null;
+            
+            const isReception = this.state.t_fundamental === 'recepcion';
+            const isSaque = this.state.t_fundamental === 'saque';
+            
+            let canRecord = false;
+            if (playerSelected && fundamentalSelected) {
+                if (isReception) {
+                    canRecord = (this.state.t_zoneFrom !== null && this.state.t_zoneTo !== null);
+                } else {
+                    canRecord = true;
+                }
+            }
+
+            const blockClass = !canRecord ? 'opacity-20 pointer-events-none grayscale transition-all duration-200 blur-[1px]' : 'transition-all duration-200';
+
+            let playersHtml = '';
+            if (isLocal) {
+                playersHtml = m.players.map(p => {
+                    const activeClass = this.state.t_player === p.id 
+                        ? 'bg-blue-600 text-white ring-2 ring-white shadow-lg scale-[1.02]' 
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700/80 border border-slate-700/60';
+                    const disableClass = '';
+                    
+                    return `
+                        <button onclick="app.setPlayer(${p.id})" 
+                            class="btn-press p-2 lg:p-2.5 rounded-xl text-left font-bold transition-all flex items-center justify-between gap-1 min-w-0 min-h-[44px] ${activeClass} ${disableClass}">
+                            <div class="flex items-center min-w-0">
+                                <span class="text-sm lg:text-base inline-block w-7 lg:w-8 shrink-0 text-center bg-slate-900/60 rounded-lg mr-1.5 lg:mr-2 py-0.5 text-blue-400 font-black">${p.number}</span>
+                                <span class="text-xs lg:text-sm truncate font-bold">${this.esc(p.name)}</span>
+                            </div>
+                            <span class="hidden sm:inline lg:hidden xl:inline shrink-0 text-[9px] bg-slate-900/50 px-1.5 py-0.5 rounded text-slate-400 font-bold uppercase">${p.position.slice(0,3)}</span>
+                        </button>
+                    `;
+                }).join('');
+            } else {
+                playersHtml = `
+                    <div class="col-span-full h-full w-full flex items-center justify-center p-4 border-2 border-dashed border-red-900/50 rounded-2xl bg-red-900/10">
+                        <div class="text-center">
+                            <span class="hidden lg:block text-5xl mb-3">😈</span>
+                            <span class="text-red-400 font-black text-xl uppercase tracking-widest">Equipo Rival</span>
+                            <p class="text-slate-500 text-xs mt-2 font-semibold">Selecciona un fundamento <br>para cargar acción al rival</p>
+                        </div>
+                    </div>
+                `;
+            }
+
+            const fundamentos = [
+                { id: 'saque', label: 'Saque' },
+                { id: 'recepcion', label: 'Recepción' },
+                { id: 'ataque_rec', label: 'Ataque Rec.' },
+                { id: 'ataque_trans', label: 'Ataque Trans.' },
+                { id: 'bloqueo', label: 'Bloqueo' },
+                { id: 'defensa', label: 'Defensa' },
+                { id: 'enf', label: 'ENF' }
+            ];
+
+            let fundHtml = fundamentos.map(f => {
+                const isActive = this.state.t_fundamental === f.id;
+                const activeClass = isActive ? 'bg-blue-600 text-white shadow-lg ring-2 ring-white lg:scale-105' : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60';
+                const isBlocked = isVisitor && f.id === 'recepcion';
+                const disableClass = (!playerSelected || isBlocked) ? 'opacity-30 pointer-events-none' : '';
+                return `
+                    <button onclick="app.setFundamental('${f.id}')" class="btn-press py-3 px-1.5 lg:px-4 min-h-[44px] rounded-xl font-bold flex items-center justify-center text-center transition-all ${activeClass} ${disableClass}">
+                        <span class="text-[11px] sm:text-xs lg:text-sm tracking-wide lg:tracking-widest uppercase font-black leading-tight">${f.label}</span>
+                    </button>
+                `;
+            }).join('');
+
+            let rightColHtml = '';
+            
+            if (isReception) {
+                const zFrom = [5, 6, 1];
+                const zTo = [5, 6, 1];
+                
+                const renderZoneBtns = (type, arr) => arr.map(z => {
+                    const sel = (type === 'from' ? this.state.t_zoneFrom : this.state.t_zoneTo) === z;
+                    const act = sel ? 'bg-blue-500 text-white ring-2 ring-white shadow-lg sm:scale-110' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-600';
+                    return `<button onclick="app.setZone('${type}', ${z})" class="btn-press w-11 h-11 sm:w-14 sm:h-14 rounded-full font-black text-xl sm:text-2xl flex items-center justify-center transition-all ${act}">${z}</button>`;
+                }).join('');
+
+                let qualityBtnsHtml = '';
+                if (canRecord) {
+                    if (isReception) {
+                        const qualities = [
+                            { val: '#', label: 'Perf', color: 'bg-emerald-500', txt: 'text-white', icon: '#' },
+                            { val: '+', label: 'Pos', color: 'bg-green-500', txt: 'text-white', icon: '+' },
+                            { val: '!', label: 'Neu', color: 'bg-yellow-500', txt: 'text-white', icon: '!' },
+                            { val: '-', label: 'Neg', color: 'bg-orange-500', txt: 'text-white', icon: '-' },
+                            { val: '/', label: 'Ven', color: 'bg-purple-500', txt: 'text-white', icon: '/' },
+                            { val: 'error', label: 'Error', color: 'bg-red-600', txt: 'text-white', icon: '❌' }
+                        ];
+                        qualityBtnsHtml = qualities.map(q => `
+                            <button onclick="app.recordAction('sigue', '${q.val}')" class="btn-press flex-1 min-w-0 py-2 sm:py-3 rounded-xl font-black text-lg sm:text-xl flex flex-col items-center justify-center transition-all ${q.color} ${q.txt} shadow-lg shadow-black/20 hover:brightness-110">
+                                <span>${q.icon}</span>
+                                <span class="text-[9px] uppercase mt-1 opacity-80">${q.label}</span>
+                            </button>
+                        `).join('');
+                    } else {
+                        const qualities = [
+                            { val: 'punto', label: 'ACE', color: 'bg-emerald-500', txt: 'text-white', icon: '⭐' },
+                            { val: '+', label: 'Pos', color: 'bg-green-500', txt: 'text-white', icon: '+' },
+                            { val: '!', label: 'Neu', color: 'bg-yellow-500', txt: 'text-white', icon: '!' },
+                            { val: '-', label: 'Neg', color: 'bg-orange-500', txt: 'text-white', icon: '-' },
+                            { val: '/', label: 'Ven', color: 'bg-purple-500', txt: 'text-white', icon: '/' },
+                            { val: 'error', label: 'Error', color: 'bg-red-600', txt: 'text-white', icon: '❌' }
+                        ];
+                        qualityBtnsHtml = qualities.map(q => `
+                            <button onclick="app.recordAction('${q.val === 'punto' ? 'punto' : q.val === 'error' ? 'error' : 'sigue'}', '${q.val}')" class="btn-press flex-1 min-w-0 py-2 sm:py-3 rounded-xl font-black text-lg sm:text-xl flex flex-col items-center justify-center transition-all ${q.color} ${q.txt} shadow-lg shadow-black/20 hover:brightness-110">
+                                <span>${q.icon}</span>
+                                <span class="text-[9px] uppercase mt-1 opacity-80">${q.label}</span>
+                            </button>
+                        `).join('');
+                    }
+                } else {
+                     qualityBtnsHtml = `<div class="w-full text-center text-slate-500 font-bold text-xs uppercase py-4">Selecciona Zonas Primero</div>`;
+                }
+
+                rightColHtml = `
+                    <div class="flex-1 flex flex-col h-full justify-between gap-3">
+                        <div class="flex justify-around items-center gap-2 bg-slate-900/50 p-3 rounded-3xl border border-slate-700/50 flex-1">
+                            <div class="text-center">
+                                <span class="block text-[10px] text-slate-400 font-black uppercase mb-3 tracking-widest">Viene de</span>
+                                <div class="flex gap-2 justify-center">${renderZoneBtns('from', zFrom)}</div>
+                            </div>
+                            <div class="text-slate-600 text-2xl sm:text-3xl font-light">➔</div>
+                            <div class="text-center">
+                                <span class="block text-[10px] text-slate-400 font-black uppercase mb-3 tracking-widest">Recibe en</span>
+                                <div class="flex gap-2 justify-center">${renderZoneBtns('to', zTo)}</div>
+                            </div>
+                        </div>
+                        <div class="bg-slate-900/50 p-2 sm:p-3 rounded-3xl border border-slate-700/50 h-24 sm:h-28 flex flex-col justify-center">
+                            <span class="block text-center text-[10px] text-slate-400 font-black uppercase mb-2 tracking-widest">Valoración</span>
+                            <div class="flex gap-1.5 w-full h-full items-stretch">
+                                ${qualityBtnsHtml}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else if (this.state.t_fundamental === 'defensa' || this.state.t_fundamental === 'enf') {
+                 rightColHtml = `
+                    <div class="flex-1 flex flex-col items-center justify-center h-full space-y-4">
+                        <span class="text-slate-400 font-black tracking-widest uppercase text-xs">Registrar</span>
+                        <button onclick="app.recordAction('error')" class="btn-press w-full h-36 lg:h-3/4 bg-red-600 text-white font-black text-2xl sm:text-4xl rounded-3xl shadow-xl shadow-red-600/20 flex flex-col items-center justify-center gap-3 hover:bg-red-500">
+                            <span>ERROR</span>
+                            <span class="text-sm font-semibold opacity-80">(Punto para el rival)</span>
+                        </button>
+                    </div>
+                `;
+            } else if (fundamentalSelected) {
+                 rightColHtml = `
+                    <div class="flex-1 flex flex-col items-center justify-center h-full space-y-4">
+                        <span class="text-slate-400 font-black tracking-widest uppercase text-xs">Resultado de la Acción</span>
+                        <div class="flex gap-3 sm:gap-4 w-full h-36 lg:h-3/4">
+                            <button onclick="app.recordAction('punto')" class="btn-press flex-1 bg-green-600 text-white font-black text-2xl sm:text-4xl rounded-3xl shadow-xl shadow-green-600/20 flex flex-col items-center justify-center gap-2 hover:bg-green-500">
+                                <span>PUNTO</span>${isSaque ? '<span class="text-sm font-semibold opacity-80">(Ace)</span>' : ''}
+                            </button>
+                            <button onclick="app.recordAction('error')" class="btn-press flex-1 bg-red-600 text-white font-black text-2xl sm:text-4xl rounded-3xl shadow-xl shadow-red-600/20 flex flex-col items-center justify-center gap-2 hover:bg-red-500">
+                                <span>ERROR</span>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            } else {
+                rightColHtml = '';
+            }
+
+            return `
+                <div class="h-full flex flex-col bg-slate-900 relative">
+                    ${this.renderMatchHeader('tracker')}
+
+                    <div data-scroll="tracker" class="flex-1 min-h-0 flex flex-col lg:flex-row gap-3 lg:gap-4 p-3 lg:p-4 overflow-y-auto lg:overflow-hidden">
+                        <!-- Col 1: Equipo y Jugadoras -->
+                        <div class="lg:w-[30%] shrink-0 lg:shrink flex flex-col bg-slate-800/40 backdrop-blur rounded-3xl border border-slate-700/80 p-2.5 lg:p-3 shadow-xl lg:min-h-0">
+                            <div class="flex bg-slate-900/90 rounded-2xl p-1 lg:p-1.5 mb-2 lg:mb-3 border border-slate-700/50 shrink-0">
+                                <button onclick="app.setTeam('local')" class="flex-1 py-2.5 lg:py-3 font-black text-xs lg:text-sm uppercase tracking-wider rounded-xl transition-all ${isLocal ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">Mi Equipo</button>
+                                <button onclick="app.setTeam('visitor')" class="flex-1 py-2.5 lg:py-3 font-black text-xs lg:text-sm uppercase tracking-wider rounded-xl transition-all ${isVisitor ? 'bg-red-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">Visitante</button>
+                            </div>
+                            <div data-scroll="players" class="lg:flex-1 lg:overflow-y-auto lg:pr-1">
+                                <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-2 gap-1.5 lg:gap-2">
+                                    ${playersHtml}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Col 2: Fundamentos -->
+                        <div class="lg:w-[25%] shrink-0 lg:shrink flex flex-col bg-slate-800/40 backdrop-blur rounded-3xl border border-slate-700/80 p-2.5 lg:p-3 shadow-xl">
+                            <span class="hidden lg:block text-xs text-slate-400 uppercase tracking-widest font-black mb-3 mt-1 text-center shrink-0">Fundamento</span>
+                            <div class="grid grid-cols-4 lg:flex lg:flex-col gap-1.5 lg:gap-2.5 lg:flex-1 lg:justify-center">
+                                ${fundHtml}
+                            </div>
+                        </div>
+
+                        <!-- Col 3: Resultados -->
+                        <div id="result-panel" class="lg:w-[45%] shrink-0 lg:shrink min-h-[230px] lg:min-h-0 flex flex-col bg-slate-800/40 backdrop-blur rounded-3xl border border-slate-700/80 p-3 lg:p-4 shadow-xl relative">
+                            ${!playerSelected || !fundamentalSelected ? 
+                                `<div class="absolute inset-0 z-10 flex items-center justify-center p-6 text-center bg-slate-900/70 backdrop-blur-sm rounded-3xl border border-slate-700">
+                                    <p class="text-slate-300 font-bold text-base lg:text-xl tracking-wide uppercase"><span class="text-blue-400">1.</span> Selecciona Jugadora<br class="hidden lg:block"><span class="lg:hidden"> · </span><br class="hidden lg:block"><span class="text-blue-400">2.</span> Selecciona Fundamento</p>
+                                </div>` : ''}
+                            ${rightColHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+        },
+
+        renderStats() {
+            const players = this.state.currentMatch.players;
+            const score = this.calculateScore();
+            // Solo las acciones que cuentan para el resultado (ignora lo cargado después de terminado el partido)
+            const actions = this.state.currentMatch.actions.filter(a => score.countedIds.has(a.id));
+
+            // Puntos Totales
+            const localPtsAtaque = actions.filter(a => a.team==='local' && a.fundamental.includes('ataque') && (a.outcome==='punto' || a.quality==='punto')).length;
+            const localPtsBloqueo = actions.filter(a => a.team==='local' && a.fundamental==='bloqueo' && (a.outcome==='punto' || a.quality==='punto')).length;
+            const localPtsSaque = actions.filter(a => a.team==='local' && a.fundamental==='saque' && (a.outcome==='punto' || a.quality==='punto')).length;
+            const localPtsRivalErr = actions.filter(a => a.team==='visitor' && (a.outcome==='error' || a.quality==='error')).length;
+            const totalLocalPts = localPtsAtaque + localPtsBloqueo + localPtsSaque + localPtsRivalErr;
+
+            const visPtsMerito = actions.filter(a => a.team==='visitor' && (a.outcome==='punto' || a.quality==='punto')).length;
+            const visPtsNuestroErr = actions.filter(a => a.team==='local' && (a.outcome==='error' || a.quality==='error')).length;
+            const totalVisPts = visPtsMerito + visPtsNuestroErr;
+
+            const getWidth = (val, total) => total > 0 ? Math.round((val/total)*100) : 0;
+            const localAtaquePct = getWidth(localPtsAtaque, totalLocalPts);
+            const localBloqueoPct = getWidth(localPtsBloqueo, totalLocalPts);
+            const localSaquePct = getWidth(localPtsSaque, totalLocalPts);
+            const localRivalErrPct = getWidth(localPtsRivalErr, totalLocalPts);
+
+            const visMeritoPct = getWidth(visPtsMerito, totalVisPts);
+            const visNuestroErrPct = getWidth(visPtsNuestroErr, totalVisPts);
+
+            const recActions = actions.filter(a => a.team==='local' && a.fundamental==='recepcion');
+
+            // 1. Eficiencia Recepción por Jugadora
+            const recTableRows = players.map(p => {
+                const pRecs = recActions.filter(a => a.playerId===p.id);
+                if (pRecs.length === 0) return '';
+                const total = pRecs.length;
+                const good = pRecs.filter(a => a.quality==='#' || a.quality==='+').length;
+                const bad = pRecs.filter(a => a.quality==='/' || a.quality==='error').length;
+                const eff = total > 0 ? Math.round(((good - bad) / total) * 100) : 0;
+                
+                let effColor = 'text-green-400';
+                if (eff < 20) effColor = 'text-red-400';
+                else if (eff < 40) effColor = 'text-yellow-400';
+
+                return `
+                    <tr class="border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors">
+                        <td class="py-2 text-left font-bold text-sm"><span class="text-blue-400 mr-2">#${p.number}</span>${this.esc(p.name)}</td>
+                        <td class="py-2 text-center text-slate-300 font-semibold">${total}</td>
+                        <td class="py-2 text-center text-emerald-400 font-bold">${good}</td>
+                        <td class="py-2 text-center text-red-400 font-bold">${bad}</td>
+                        <td class="py-2 text-center font-black ${effColor} text-lg">${eff}%</td>
+                    </tr>
+                `;
+            }).join('');
+
+            // 2. Eficiencia Recepción por Zonas (Dirección)
+            const zones = [5, 6, 1];
+            const getZoneRows = (type) => {
+                const rows = zones.map(z => {
+                    const subset = recActions.filter(a => (type === 'from' ? a.zoneFrom : a.zoneTo) === z);
+                    if (subset.length === 0) return '';
+                    const total = subset.length;
+                    const good = subset.filter(a => a.quality==='#' || a.quality==='+').length;
+                    const bad = subset.filter(a => a.quality==='/' || a.quality==='error').length;
+                    const eff = total > 0 ? Math.round(((good - bad) / total) * 100) : 0;
+                    
+                    let effColor = 'text-green-400';
+                    if (eff < 20) effColor = 'text-red-400';
+                    else if (eff < 40) effColor = 'text-yellow-400';
+
+                    return `
+                        <tr class="border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors">
+                            <td class="py-2 text-center font-black text-slate-300 text-base">Z${z}</td>
+                            <td class="py-2 text-center text-slate-300 font-semibold">${total}</td>
+                            <td class="py-2 text-center text-emerald-400 font-bold">${good}</td>
+                            <td class="py-2 text-center text-red-400 font-bold">${bad}</td>
+                            <td class="py-2 text-center font-black ${effColor} text-lg">${eff}%</td>
+                        </tr>
+                    `;
+                }).join('');
+                return rows || '<tr><td colspan="5" class="text-center py-4 text-slate-500 font-semibold text-xs">Sin datos registrados en esta zona.</td></tr>';
+            };
+
+            const zoneFromRows = getZoneRows('from');
+            const zoneToRows = getZoneRows('to');
+
+            return `
+                <div class="h-full flex flex-col bg-slate-900">
+                    ${this.renderMatchHeader('stats')}
+                    <div data-scroll="stats" class="flex-1 min-h-0 overflow-y-auto p-3 lg:p-6 flex flex-col lg:flex-row gap-4 lg:gap-6">
+                        
+                        <!-- Col 1: Distribución de Puntos -->
+                        <div class="w-full lg:w-1/2 flex flex-col gap-4 lg:gap-6">
+                            <div class="bg-slate-800/40 rounded-3xl border border-slate-700/80 p-6 shadow-xl">
+                                <h3 class="text-lg font-black text-blue-400 mb-4 uppercase tracking-widest border-b border-slate-700 pb-2">Puntos del Local (Total: ${totalLocalPts})</h3>
+                                <div class="space-y-4">
+                                    <div class="bg-slate-900/50 p-3 rounded-xl border border-slate-700/50">
+                                        <div class="flex justify-between items-center mb-2">
+                                            <span class="font-bold text-slate-300">🏐 Por Ataque:</span>
+                                            <span class="text-xl font-black text-white">${localPtsAtaque} <span class="text-sm text-slate-500 font-normal">(${localAtaquePct}%)</span></span>
+                                        </div>
+                                        <div class="w-full bg-slate-800 rounded-full h-3"><div class="bg-blue-500 h-3 rounded-full transition-all duration-500" style="width: ${localAtaquePct}%"></div></div>
+                                    </div>
+                                    <div class="bg-slate-900/50 p-3 rounded-xl border border-slate-700/50">
+                                        <div class="flex justify-between items-center mb-2">
+                                            <span class="font-bold text-slate-300">✋ Por Bloqueo:</span>
+                                            <span class="text-xl font-black text-white">${localPtsBloqueo} <span class="text-sm text-slate-500 font-normal">(${localBloqueoPct}%)</span></span>
+                                        </div>
+                                        <div class="w-full bg-slate-800 rounded-full h-3"><div class="bg-amber-500 h-3 rounded-full transition-all duration-500" style="width: ${localBloqueoPct}%"></div></div>
+                                    </div>
+                                    <div class="bg-slate-900/50 p-3 rounded-xl border border-slate-700/50">
+                                        <div class="flex justify-between items-center mb-2">
+                                            <span class="font-bold text-slate-300">🎯 Por Saque (Aces):</span>
+                                            <span class="text-xl font-black text-white">${localPtsSaque} <span class="text-sm text-slate-500 font-normal">(${localSaquePct}%)</span></span>
+                                        </div>
+                                        <div class="w-full bg-slate-800 rounded-full h-3"><div class="bg-emerald-500 h-3 rounded-full transition-all duration-500" style="width: ${localSaquePct}%"></div></div>
+                                    </div>
+                                    <div class="bg-green-900/20 p-3 rounded-xl border border-green-700/30">
+                                        <div class="flex justify-between items-center mb-2">
+                                            <span class="font-bold text-green-400">🎁 Por Error del Rival:</span>
+                                            <span class="text-xl font-black text-green-400">${localPtsRivalErr} <span class="text-sm text-green-600 font-normal">(${localRivalErrPct}%)</span></span>
+                                        </div>
+                                        <div class="w-full bg-green-900/50 rounded-full h-3"><div class="bg-green-400 h-3 rounded-full transition-all duration-500" style="width: ${localRivalErrPct}%"></div></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bg-slate-800/40 rounded-3xl border border-slate-700/80 p-6 shadow-xl">
+                                <h3 class="text-lg font-black text-red-400 mb-4 uppercase tracking-widest border-b border-slate-700 pb-2">Puntos del Visitante (Total: ${totalVisPts})</h3>
+                                <div class="space-y-4">
+                                    <div class="bg-slate-900/50 p-3 rounded-xl border border-slate-700/50">
+                                        <div class="flex justify-between items-center mb-2">
+                                            <span class="font-bold text-slate-300">🔥 Por Mérito Propio:</span>
+                                            <span class="text-xl font-black text-white">${visPtsMerito} <span class="text-sm text-slate-500 font-normal">(${visMeritoPct}%)</span></span>
+                                        </div>
+                                        <div class="w-full bg-slate-800 rounded-full h-3"><div class="bg-orange-500 h-3 rounded-full transition-all duration-500" style="width: ${visMeritoPct}%"></div></div>
+                                    </div>
+                                    <div class="bg-red-900/20 p-3 rounded-xl border border-red-700/30">
+                                        <div class="flex justify-between items-center mb-2">
+                                            <span class="font-bold text-red-400">❌ Por Errores Nuestros:</span>
+                                            <span class="text-xl font-black text-red-400">${visPtsNuestroErr} <span class="text-sm text-red-600 font-normal">(${visNuestroErrPct}%)</span></span>
+                                        </div>
+                                        <div class="w-full bg-red-900/50 rounded-full h-3"><div class="bg-red-500 h-3 rounded-full transition-all duration-500" style="width: ${visNuestroErrPct}%"></div></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Col 2: Tablas de Recepción -->
+                        <div class="w-full lg:w-1/2 bg-slate-800/40 rounded-3xl border border-slate-700/80 p-4 lg:p-6 shadow-xl flex flex-col lg:overflow-hidden">
+                            <div class="mb-4 shrink-0">
+                                <h3 class="text-lg font-black text-white uppercase tracking-widest">Análisis de Recepción</h3>
+                                <p class="text-[10px] text-slate-400 font-bold mt-1 bg-slate-900 inline-block px-2 py-1 rounded">Eficiencia = ((Excelentes [#,+]) - (Errores [/,Err])) / Total</p>
+                            </div>
+                            
+                            <!-- Contenedor con Scroll para las 3 tablas -->
+                            <div data-scroll="stats-rec" class="lg:flex-1 lg:overflow-y-auto lg:pr-2 space-y-4 lg:space-y-6">
+                                
+                                <!-- 1. Por Jugadora -->
+                                <div class="bg-slate-900/80 rounded-2xl border border-slate-700/50 p-4">
+                                    <h4 class="text-xs font-black text-blue-400 mb-2 uppercase tracking-widest border-b border-slate-700 pb-2">Por Jugadora</h4>
+                                    <table class="w-full text-white text-sm">
+                                        <thead>
+                                            <tr class="text-slate-400 text-[10px] uppercase tracking-wider border-b border-slate-700">
+                                                <th class="py-2 text-left font-black">Jugadora</th>
+                                                <th class="py-2 text-center font-black">Tot</th>
+                                                <th class="py-2 text-center font-black text-emerald-500">Exc</th>
+                                                <th class="py-2 text-center font-black text-red-500">Err</th>
+                                                <th class="py-2 text-center font-black">Efic</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            ${recTableRows || '<tr><td colspan="5" class="text-center py-4 text-slate-500 font-semibold text-xs">No hay datos de recepción registrados aún.</td></tr>'}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <!-- 2. Por Origen (Viene de) -->
+                                <div class="bg-slate-900/80 rounded-2xl border border-slate-700/50 p-4">
+                                    <h4 class="text-xs font-black text-amber-400 mb-2 uppercase tracking-widest border-b border-slate-700 pb-2">Por Origen del Saque Rival (Viene de)</h4>
+                                    <table class="w-full text-white text-sm">
+                                        <thead>
+                                            <tr class="text-slate-400 text-[10px] uppercase tracking-wider border-b border-slate-700">
+                                                <th class="py-2 text-center font-black">Zona Origen</th>
+                                                <th class="py-2 text-center font-black">Tot</th>
+                                                <th class="py-2 text-center font-black text-emerald-500">Exc</th>
+                                                <th class="py-2 text-center font-black text-red-500">Err</th>
+                                                <th class="py-2 text-center font-black">Efic</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            ${zoneFromRows}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <!-- 3. Por Destino (Cae en) -->
+                                <div class="bg-slate-900/80 rounded-2xl border border-slate-700/50 p-4">
+                                    <h4 class="text-xs font-black text-purple-400 mb-2 uppercase tracking-widest border-b border-slate-700 pb-2">Por Zona de Cobertura (Recibimos en)</h4>
+                                    <table class="w-full text-white text-sm">
+                                        <thead>
+                                            <tr class="text-slate-400 text-[10px] uppercase tracking-wider border-b border-slate-700">
+                                                <th class="py-2 text-center font-black">Zona Recepción</th>
+                                                <th class="py-2 text-center font-black">Tot</th>
+                                                <th class="py-2 text-center font-black text-emerald-500">Exc</th>
+                                                <th class="py-2 text-center font-black text-red-500">Err</th>
+                                                <th class="py-2 text-center font-black">Efic</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            ${zoneToRows}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            `;
+        },
+
+        renderHistory() {
+            const m = this.state.currentMatch;
+            
+            const historyHtml = m.actions.map(a => {
+                let badge = '';
+                let details = '';
+                let pName = 'Equipo Visitante';
+                let pNumber = '🤖';
+                
+                if (a.team === 'local' && a.playerId) {
+                    const pObj = m.players.find(p => p.id === a.playerId);
+                    if (pObj) { pName = pObj.name; pNumber = pObj.number; }
+                    else { pName = 'Jugadora eliminada'; pNumber = '?'; }
+                }
+                
+                const fundName = a.fundamental.replace('_', ' ').toUpperCase();
+
+                if (a.fundamental === 'recepcion' || (a.fundamental === 'saque' && a.zoneFrom)) {
+                    if (a.fundamental === 'recepcion') {
+                        const qColors = { '#':'bg-emerald-500', '+': 'bg-green-600', '!': 'bg-yellow-500', '-': 'bg-orange-500', '/': 'bg-purple-600', 'error': 'bg-red-600' };
+                        const c = qColors[a.quality] || 'bg-slate-600';
+                        badge = `<span class="${c} text-white px-3 py-1 rounded-lg text-sm font-black text-center inline-block min-w-[40px] shadow-md">${a.quality === 'error' ? 'ERR' : a.quality}</span>`;
+                    } else { // Saque
+                        const qColors = { 'punto':'bg-emerald-500', '+': 'bg-green-600', '!': 'bg-yellow-500', '-': 'bg-orange-500', '/': 'bg-purple-600', 'error': 'bg-red-600' };
+                        const c = qColors[a.quality] || 'bg-slate-600';
+                        badge = `<span class="${c} text-white px-3 py-1 rounded-lg text-sm font-black text-center inline-block min-w-[40px] shadow-md">${a.quality === 'error' ? 'ERR' : a.quality === 'punto' ? 'ACE' : a.quality}</span>`;
+                    }
+                    details = `<span class="bg-slate-900 px-2 py-1 rounded-md text-xs text-slate-300 font-bold ml-2 sm:ml-3 border border-slate-600 shadow-inner whitespace-nowrap">Zona: ${a.zoneFrom} ➔ ${a.zoneTo}</span>`;
+                } else {
+                    if (a.outcome === 'punto') badge = '<span class="bg-green-600 text-white px-3 py-1 rounded-lg text-sm font-black text-center inline-block shadow-md">PUNTO</span>';
+                    else if (a.outcome === 'error') badge = '<span class="bg-red-600 text-white px-3 py-1 rounded-lg text-sm font-black text-center inline-block shadow-md">ERROR</span>';
+                }
+
+                const teamColor = a.team === 'local' ? 'border-l-4 border-blue-500' : 'border-l-4 border-red-500';
+
+                return `
+                    <div class="bg-slate-800/80 p-3 sm:p-4 rounded-2xl flex justify-between items-center gap-2 border border-slate-700/50 mb-2 sm:mb-3 shadow-lg ${teamColor}">
+                        <div class="flex items-center flex-wrap gap-x-3 sm:gap-x-4 gap-y-2 min-w-0">
+                            <div class="w-10 h-10 sm:w-12 sm:h-12 shrink-0 bg-slate-900 rounded-full flex items-center justify-center font-black text-lg sm:text-xl text-slate-300 border border-slate-700">${pNumber}</div>
+                            <div class="w-28 sm:w-40 min-w-0">
+                                <div class="font-black text-sm text-white truncate">${this.esc(pName)}</div>
+                                <div class="text-[10px] text-slate-400 font-bold uppercase tracking-widest">${a.team === 'local' ? 'Local' : 'Visitante'}</div>
+                            </div>
+                            <div class="sm:w-32 font-black text-blue-300 uppercase tracking-wide text-xs sm:text-sm">${fundName}</div>
+                            <div class="flex items-center flex-wrap gap-y-1">
+                                ${badge}
+                                ${details}
+                            </div>
+                        </div>
+                        ${this.canWrite() ? `<button onclick="app.deleteAction(${a.id})" title="Borrar acción" class="shrink-0 text-slate-500 hover:text-red-400 p-3 bg-slate-900/50 hover:bg-slate-900 rounded-xl btn-press font-bold text-xs uppercase flex items-center gap-2 border border-slate-700">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                            <span class="hidden sm:inline">Borrar Acción</span>
+                        </button>` : ''}
+                    </div>
+                `;
+            }).join('') || '<div class="text-center w-full text-slate-500 text-lg py-20 font-bold uppercase tracking-wider flex flex-col items-center gap-4"><span class="text-6xl">👻</span> Historial vacío</div>';
+
+            return `
+                <div class="h-full flex flex-col bg-slate-900">
+                    ${this.renderMatchHeader('history')}
+                    <div class="flex-1 min-h-0 p-3 sm:p-6 flex flex-col items-center overflow-hidden">
+                        <div data-scroll="history" class="w-full max-w-4xl flex-1 overflow-y-auto pr-1 sm:pr-4 pb-10">
+                            ${historyHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+        },
+
+        render() {
+            const root = document.getElementById('app');
+            if (!this.isLogged()) {
+                root.innerHTML = this.renderLogin();
+                const u = document.getElementById('login-user');
+                if (u) u.focus();
+                return;
+            }
+            if (this.state.view !== 'home' && !this.state.currentMatch) this.state.view = 'home';
+            if (!this.canWrite() && (this.state.view === 'tracker' || this.state.view === 'setup')) this.state.view = this.state.currentMatch ? 'stats' : 'home';
+            this.save();
+            // Conservar la posición de scroll de cada panel entre redibujos (en el celular, cada toque redibuja)
+            const sameView = this._lastView === this.state.view;
+            const scrolls = {};
+            if (sameView) root.querySelectorAll('[data-scroll]').forEach(el => { scrolls[el.dataset.scroll] = el.scrollTop; });
+            this._lastView = this.state.view;
+            if (this.state.view === 'home') root.innerHTML = this.renderHome();
+            else if (this.state.view === 'setup') root.innerHTML = this.renderSetup();
+            else if (this.state.view === 'tracker') root.innerHTML = this.renderTracker();
+            else if (this.state.view === 'stats') root.innerHTML = this.renderStats();
+            else if (this.state.view === 'history') root.innerHTML = this.renderHistory();
+            root.querySelectorAll('[data-scroll]').forEach(el => { if (scrolls[el.dataset.scroll]) el.scrollTop = scrolls[el.dataset.scroll]; });
+            this.afterRenderScroll();
+        },
+
+        // En pantallas angostas: al elegir fundamento baja al panel de resultado; al registrar, vuelve a las jugadoras
+        afterRenderScroll() {
+            const what = this._scrollTo; this._scrollTo = null;
+            if (!what || window.innerWidth >= 1024 || this.state.view !== 'tracker') return;
+            const box = document.querySelector('[data-scroll="tracker"]');
+            if (!box) return;
+            if (what === 'top') { box.scrollTop = 0; return; }
+            const panel = document.getElementById('result-panel');
+            if (!panel) return;
+            const pr = panel.getBoundingClientRect(), br = box.getBoundingClientRect();
+            if (pr.bottom > br.bottom) box.scrollTop += Math.min(pr.bottom - br.bottom + 12, pr.top - br.top - 8);
+        }
+    };
+
+    window.onload = () => app.init();
+</script>
+</body>
+</html>
+</body></html>
